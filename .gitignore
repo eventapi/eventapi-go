@@ -1,0 +1,50 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# Build output
+bin/
+*.o
+*.a
+
+# IDE specific files
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+*.iml
+
+# Project specific - only match root directory binary
+/protoc-gen-eventapi
+
+# Generated test files (keep proto files, ignore generated Go)
+/examples/gen
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+
+# Temp files
+tmp/
+temp/
+*.tmp

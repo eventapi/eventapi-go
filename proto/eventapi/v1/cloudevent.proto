@@ -1,0 +1,160 @@
+// EventAPI CloudEvent IDL
+//
+// 定义 CloudEvent 相关的类型和枚举，供 Transport 和 Sink 模块复用。
+// 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md
+
+syntax = "proto3";
+package eventapi.v1;
+
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/eventapi/eventapi-go/pkg/eventapi/v1;eventapiv1";
+
+// =====================================================================
+// CloudEvent 数据类型
+// =====================================================================
+
+// 事件数据编码格式，编译时确定
+enum EventDataContentType {
+  CONTENT_TYPE_UNSPECIFIED = 0;
+  CONTENT_TYPE_JSON = 1;
+  CONTENT_TYPE_PROTOBUF = 2;
+  CONTENT_TYPE_AVRO = 3;
+}
+
+// =====================================================================
+// CloudEvent 内存模型 (In-Memory Envelope)
+// =====================================================================
+
+// CloudEvent 消息结构
+// 符合 CloudEvents 1.0.2 规范
+// 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md
+// Protobuf 格式: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/formats/protobuf-format.md
+message CloudEvent {
+  // CloudEvent ID，唯一标识符
+  // 由 SDK 自动生成 UUID
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#id
+  string id = 1;
+
+  // 事件来源，标识事件发生的位置
+  // 格式: URI 或 URN
+  // 例如: "urn:eventapi:service:user-service", "/myapp/users"
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#source
+  string source = 2;
+
+  // CloudEvents 规范版本
+  // 固定值: "1.0"
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#specversion
+  string spec_version = 3;
+
+  // 事件类型，唯一标识事件的类型和版本
+  // 由 event_type 选项定义
+  // 例如: "acme.user.created.v1"
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#type
+  string type = 4;
+
+  // 数据内容类型 (MIME type)
+  // 由 Codec 决定，如:
+  // - JSON Codec: "application/json"
+  // - Protobuf Codec: "application/protobuf"
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#datacontenttype
+  EventDataContentType data_content_type = 5;
+
+  // 数据模式 (Schema URL)，指向数据的 schema 定义
+  // 可选字段
+  // 例如: "https://acme.com/schemas/user-created.json"
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#dataschema
+  string data_schema = 6;
+
+  // 主题，标识事件相关的资源
+  // 由 is_subject 标记的字段提取
+  // 例如: "user.123", "order.456"
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#subject
+  string subject = 7;
+
+  // 事件发生时间
+  // 由 SDK 在发送时自动填充
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#time
+  google.protobuf.Timestamp time = 8;
+
+  // 扩展属性 (可选)
+  // 用于添加自定义元数据，如 trace_id, tenant_id
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#extension-context-attributes
+  map<string, AttributeValue> extensions = 9;
+
+  // 事件数据负载
+  // 由 Codec 编码后的字节数据
+  // JSON Codec: UTF-8 编码的 JSON 字符串
+  // Protobuf Codec: protobuf 序列化后的字节
+  // 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#data
+  bytes data = 10;
+
+  // 扩展属性值类型
+  // 支持多种数据类型
+  message AttributeValue {
+    oneof attr {
+      // 布尔值
+      bool boolean = 1;
+
+      // 32位整数
+      int32 integer = 2;
+
+      // 字符串
+      string string = 3;
+
+      // 字节数组
+      bytes bytes = 4;
+
+      // URI
+      string uri = 5;
+
+      // URI Reference
+      string uri_ref = 6;
+
+      // 时间戳
+      google.protobuf.Timestamp timestamp = 7;
+    }
+  }
+}
+
+// =====================================================================
+// CloudEvent 相关注解 (Options)
+// =====================================================================
+
+// 扩展 Message 选项，用于声明 CloudEvent 类型
+// 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#type
+extend google.protobuf.MessageOptions {
+  // event_type 选项编号: 50001
+  // 声明此消息对应的 CloudEvent type 属性
+  // 格式: {reverse-domain}.{event-name}.{version}
+  // 例如: "acme.user.created.v1", "io.github.order.paid.v2"
+  string event_type = 50001;
+}
+
+// 扩展 Field 选项，用于标记 subject 字段
+// 参考: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#subject
+extend google.protobuf.FieldOptions {
+  // is_event_subject 选项编号: 50002
+  // 标记此字段的值将提取为 CloudEvent 的 subject 属性
+  // subject 用于标识事件所描述的资源
+  // 例如: user_id 字段标记为 subject，则 "user.123" 成为 subject
+  bool is_event_subject = 50002;
+}
+
+// 扩展 Field 选项，用于标记 CloudEvent header 字段
+// 标记此字段的值将提取为 CloudEvent 扩展属性 (extensions/headers)
+// 而非放入 data payload，便于不反序列化即可读取
+extend google.protobuf.FieldOptions {
+  // is_event_header 选项编号: 50004
+  bool is_event_header = 50004;
+}
+
+// 扩展 Message 选项，用于声明事件数据编码格式
+// 用于 Sink 生成器决定如何解析 data 字段
+extend google.protobuf.MessageOptions {
+  // event_data_content_type 选项编号: 50003
+  // 声明此消息对应的 CloudEvent data_content_type
+  // 默认: CONTENT_TYPE_JSON
+  EventDataContentType event_data_content_type = 50003;
+}
