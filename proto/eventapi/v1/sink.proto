@@ -1,0 +1,227 @@
+// EventAPI Sink IDL
+//
+// 定义事件与下游数据接收端（StarRocks、MySQL 等）的字段映射，
+// 用于自动生成 DDL 建表语句和 Flink SQL pipeline。
+//
+// =====================================================================
+// 惯例
+// =====================================================================
+//
+// sink 与 operation 写在同一个 SEND rpc 上：
+//
+//   rpc SendOrder(OrderEvent) returns (google.protobuf.Empty) {
+//     option (eventapi.v1.operation) = { ... };  // 怎么发
+//     option (eventapi.v1.sink) = { ... };        // 发完去哪
+//   }
+//
+// 规则：
+//   - sink 只放在 action: SEND 的 rpc 上
+//   - RECEIVE rpc 不写 sink
+//   - 一个 rpc 可配多个 sink（同一消息落多个目标）
+//
+// =====================================================================
+// 完整示例
+// =====================================================================
+//
+//   rpc SendOrder(OrderEvent) returns (google.protobuf.Empty) {
+//     option (eventapi.v1.operation) = {
+//       action: SEND
+//       channel: { address: "order.events" }
+//     };
+//     option (eventapi.v1.sink) = {
+//       target: SINK_TYPE_STARROCKS
+//       database: "analytics"
+//       table: "order_events"
+//       source_topic: "order.events"
+//       event_data_content_type: CONTENT_TYPE_JSON
+//       primary_key: ["event_id"]
+//       partition_key: ["event_time"]
+//       mapping: [
+//         // CloudEvent header 字段
+//         { header_path: "ce_id",      target_column: "event_id",   type: COLUMN_TYPE_VARCHAR, not_null: true },
+//         { header_path: "ce_type",    target_column: "event_type", type: COLUMN_TYPE_VARCHAR },
+//         { header_path: "ce_source",  target_column: "event_source", type: COLUMN_TYPE_VARCHAR },
+//         { header_path: "ce_time",    target_column: "event_time", type: COLUMN_TYPE_TIMESTAMP },
+//         { header_path: "ce_subject", target_column: "subject",    type: COLUMN_TYPE_VARCHAR },
+//
+//         // 消息体 data 字段（JSON 路径）
+//         { data_path: "$.order_id",     target_column: "order_id",    type: COLUMN_TYPE_VARCHAR, not_null: true },
+//         { data_path: "$.user_id",      target_column: "user_id",     type: COLUMN_TYPE_VARCHAR },
+//         { data_path: "$.order_amount", target_column: "order_amount",type: COLUMN_TYPE_BIGINT },
+//         { data_path: "$.order_status", target_column: "order_status",type: COLUMN_TYPE_VARCHAR },
+//
+//         // 嵌套提取：header 值是 JSON 时
+//         { header_path: "$.ce_source.tenant", target_column: "tenant_id", type: COLUMN_TYPE_VARCHAR }
+//       ]
+//     };
+//   }
+//
+// =====================================================================
+// 字段映射规则
+// =====================================================================
+//
+// header_path:
+//   - 直接读取: "ce_id", "ce_type", "ce_source", "ce_time", "ce_subject"
+//   - 嵌套提取: "$.ce_source.tenant" → JSON_VALUE(ce_source, '$.tenant')
+//
+// data_path:
+//   - CONTENT_TYPE_JSON:  Flink 自动反序列化，直接映射列
+//   - 其他格式:           JSON_VALUE(value, '$.field') 手动解析
+//
+// =====================================================================
+// 自动推断
+// =====================================================================
+//
+// 生成器会自动遍历 RPC 入参 Message 的所有字段，
+// 对于未在 mapping 中显式声明 data_path 的字段，按以下规则自动补全：
+//
+//   1. data_path:      $.<field_name>
+//   2. target_column:  <field_name> (保持 snake_case)
+//   3. type:           根据 Proto 字段类型自动转换（见下表）
+//   4. not_null:       optional 为 false，否则 true
+//   5. comment:        自动提取 Proto 字段注释
+//
+// Proto 类型 → Sink 类型:
+//   string                      → VARCHAR
+//   int32/int64/uint32/uint64   → BIGINT
+//   bool                        → BOOLEAN
+//   float/double                → DOUBLE
+//   google.protobuf.Timestamp   → TIMESTAMP
+//   google.protobuf.Struct/map  → JSON
+//   bytes                       → VARCHAR (Base64)
+//   enum                        → VARCHAR
+//
+// 关闭自动推断:
+//   option (eventapi.v1.sink) = {
+//     auto_infer_data_mapping: false
+//     mapping: [ ... ]  // 必须手动写全所有字段
+//   };
+//
+// =====================================================================
+// 生成
+// =====================================================================
+//
+//   buf generate --template buf.gen.sink.yaml
+//
+// 产物：DDL 建表语句 + Flink SQL pipeline
+//
+// =====================================================================
+
+syntax = "proto3";
+package eventapi.v1;
+
+import "google/protobuf/descriptor.proto";
+import "eventapi/v1/cloudevent.proto";
+
+option go_package = "github.com/eventapi/eventapi-go/pkg/eventapi/v1;eventapiv1";
+
+// =====================================================================
+// Sink 选项
+// =====================================================================
+
+extend google.protobuf.MethodOptions {
+  // sink 选项编号: 50102
+  SinkRule sink = 50102;
+}
+
+// Method 级别：Sink 目标配置
+message SinkRule {
+  // 目标系统类型
+  SinkType target = 1;
+
+  // 目标数据库名
+  string database = 2;
+
+  // 目标表名
+  string table = 3;
+
+  // 主键列
+  repeated string primary_key = 4;
+
+  // 分区列
+  repeated string partition_key = 5;
+
+  // 字段映射
+  repeated FieldMapping mapping = 6;
+
+  // Sink 特定配置
+  SinkConfig config = 7;
+
+  // 源 Topic 名称（可选，通常从事件定义推断）
+  string source_topic = 8;
+
+  // 事件数据编码格式，编译时确定
+  // 用于 Sink 生成器决定如何解析 data 字段
+  EventDataContentType event_data_content_type = 9;
+
+  // 是否自动推断 data_path 映射，默认开启
+  // 关闭后必须手动写全所有 mapping
+  optional bool auto_infer_data_mapping = 10;
+
+  // 是否自动映射所有字段，默认关闭
+  // 开启后自动将所有 Header/Data 字段映射到同名列
+  // 可通过 mapping 中的 ignore: true 排除特定字段
+  bool auto_map = 11;
+}
+
+enum SinkType {
+  SINK_TYPE_UNSPECIFIED = 0;
+  SINK_TYPE_STARROCKS = 1;
+  SINK_TYPE_MYSQL = 2;
+  SINK_TYPE_CLICKHOUSE = 3;
+  SINK_TYPE_POSTGRESQL = 4;
+}
+
+message FieldMapping {
+  // 源字段路径
+  oneof source {
+    // 元数据路径: "ce_id", "ce_source", "ce_time"
+    // 嵌套 JSON 提取: "$.ce_source.tenant"
+    string header_path = 1;
+
+    // 数据路径: "$.user_id", "$.order.amount"
+    // 解析方式由 event_data_content_type 决定
+    string data_path = 2;
+  }
+
+  // 目标列名
+  string target_column = 3;
+
+  // 目标列类型
+  ColumnType type = 4;
+
+  // 是否 NOT NULL
+  bool not_null = 5;
+
+  // 列注释
+  string comment = 6;
+
+  // 是否忽略该字段（不落盘）
+  // 仅在 auto_map: true 时有效，用于屏蔽敏感字段
+  bool ignore = 7;
+}
+
+enum ColumnType {
+  COLUMN_TYPE_UNSPECIFIED = 0;
+  COLUMN_TYPE_VARCHAR = 1;
+  COLUMN_TYPE_BIGINT = 2;
+  COLUMN_TYPE_TIMESTAMP = 3;
+  COLUMN_TYPE_DECIMAL = 4;
+  COLUMN_TYPE_BOOLEAN = 5;
+  COLUMN_TYPE_JSON = 6;
+  COLUMN_TYPE_DOUBLE = 7;
+}
+
+message SinkConfig {
+  // Flink checkpoint 间隔（如 "60s"）
+  string checkpoint_interval = 1;
+
+  // 批量大小
+  int32 batch_size = 2;
+
+  // Sink 并行度
+  int32 parallelism = 3;
+
+  // 额外属性
+  map<string, string> properties = 4;
+}

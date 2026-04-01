@@ -1,0 +1,9 @@
+{{define "nested_message"}}
+type {{.Name}} struct {
+{{range .Fields}}
+	{{if .Comment}}// {{.Comment}}
+	{{else}}// {{.JSONTag}}
+	{{end}}	{{.Name}} {{.Type}} `json:"{{.JSONTag}}"`
+{{end}}
+}
+{{end}}

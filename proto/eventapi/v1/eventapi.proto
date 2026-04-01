@@ -1,0 +1,235 @@
+// EventAPI Core IDL
+//
+// EventAPI 是一个基于 Protobuf 的异步事件驱动架构规范，它将 CloudEvents 的事件模型
+// 与 AsyncAPI 的拓扑架构完美融合，提供类型安全、自描述的异步通信能力。
+//
+// 设计参考:
+// - CloudEvents Spec: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md
+// - CloudEvents Protobuf Format: https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/formats/protobuf-format.md
+// - AsyncAPI Spec: https://www.asyncapi.com/docs/reference/specification/latest
+//
+// =====================================================================
+// 使用方法
+// =====================================================================
+//
+// 1. 定义 Service，声明传输协议:
+//
+//    service UserEventBus {
+//      option (eventapi.v1.server) = {
+//        protocols: [
+//          { name: "kafka", version: "3.5.0" }
+//        ]
+//      };
+//      ...
+//    }
+//
+// 2. 定义 RPC 方法，声明通道拓扑:
+//
+//    rpc SendUserCreated(UserCreatedEvent) returns (google.protobuf.Empty) {
+//      option (eventapi.v1.operation) = {
+//        action: SEND
+//        channel: {
+//          address: "user.events"
+//          description: "用户事件通道"
+//        }
+//      };
+//    }
+//
+// 3. 定义 Message，声明事件类型和 subject 字段:
+//
+//    message UserCreatedEvent {
+//      option (eventapi.v1.event_type) = "acme.user.created.v1";
+//      string user_id = 1 [(eventapi.v1.is_event_subject) = true];
+//      string email = 2;
+//      int64 created_at = 3;
+//    }
+//
+// 4. 生成代码:
+//
+//    protoc \
+//      --plugin=protoc-gen-eventapi=./protoc-gen-eventapi \
+//      --eventapi_out=. \
+//      --go_out=. \
+//      --proto_path=. \
+//      your_service.proto
+//
+// =====================================================================
+
+syntax = "proto3";
+package eventapi.v1;
+
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/timestamp.proto";
+import "eventapi/v1/cloudevent.proto";
+
+option go_package = "github.com/eventapi/eventapi-go/pkg/eventapi/v1;eventapiv1";
+
+// =====================================================================
+// EventAPI 自定义注解 (Options)
+// =====================================================================
+
+// 扩展 Service 选项，用于声明传输协议配置
+// 参考: https://www.asyncapi.com/docs/reference/specification/latest#serverObject
+extend google.protobuf.ServiceOptions {
+  // server 选项编号: 50201
+  // 用于配置 AsyncAPI Server (即消息 Broker) 的协议信息
+  AsyncApiServerRule server = 50201;
+}
+
+// Service 级别：AsyncAPI Server（Broker）协议配置
+// 对应 AsyncAPI 规范中的 Server Object
+// 参考: https://www.asyncapi.com/docs/reference/specification/latest#serverObject
+message AsyncApiServerRule {
+  // 支持的协议列表
+  // 当有多个协议时，会为每个协议生成一个独立的 SDK
+  // 例如: [{name: "kafka", version: "3.5.0"}, {name: "amqp", version: "0.9.1"}]
+  repeated Protocol protocols = 1;
+}
+
+// 协议定义
+message Protocol {
+  // 协议名称，如: kafka, amqp, mqtt, nats, rocketmq
+  string name = 1;
+
+  // 协议版本，如: "3.5.0" (Kafka), "0.9.1" (AMQP)
+  string version = 2;
+}
+
+// 扩展 Method 选项，用于声明通道拓扑
+// 参考: https://www.asyncapi.com/docs/reference/specification/latest#channelItemObject
+extend google.protobuf.MethodOptions {
+  // operation 选项编号: 50101
+  // 用于配置 Channel (即 Topic/Queue) 和操作类型
+  OperationRule operation = 50101;
+}
+
+// Method 级别：通道与操作配置
+// 对应 Channel Item Object
+message OperationRule {
+  // 操作动作: send 或 receive
+  ActionType action = 1;
+
+  // 通道配置，包含地址、描述和协议绑定
+  Channel channel = 2;
+
+  // 操作动作枚举
+  enum ActionType {
+    UNSPECIFIED = 0;
+    SEND = 1;
+    RECEIVE = 2;
+  }
+
+  // Channel 通道定义
+  // 参考: https://www.asyncapi.com/docs/reference/specification/latest#channelItemObject
+  message Channel {
+    // 通道地址，即 Topic 或 Queue 名称
+    // 例如: "user.events", "order.created"
+    string address = 1;
+
+    // 通道描述，用于文档生成
+    string description = 2;
+
+    // 协议特定的绑定配置
+    // 参考: https://github.com/asyncapi/bindings
+    Binding binding = 3;
+
+    // 协议绑定配置
+    // 包含 Kafka, AMQP, MQTT 等协议的特定配置
+    message Binding {
+      // Kafka 协议绑定
+      // 参考: https://github.com/asyncapi/bindings/tree/master/kafka
+      Kafka kafka = 1;
+
+      // AMQP 协议绑定
+      // 参考: https://github.com/asyncapi/bindings/tree/master/amqp
+      Amqp amqp = 2;
+
+      // MQTT 协议绑定
+      // 参考: https://github.com/asyncapi/bindings/tree/master/mqtt
+      Mqtt mqtt = 3;
+
+      // NATS 协议绑定
+      // 参考: https://github.com/asyncapi/bindings/tree/master/nats
+      Nats nats = 4;
+
+      // RocketMQ 协议绑定
+      // 参考: https://github.com/asyncapi/bindings/tree/master/rocketmq
+      Rocketmq rocketmq = 5;
+
+      // Kafka 绑定配置
+      message Kafka {
+        // 消息 Key，用于分区路由
+        // 例如: "user_id" 表示按用户 ID 路由到不同分区
+        string key = 1;
+
+        // 指定分区号 (可选)
+        // 如果不指定，使用默认分区策略
+        int32 partition = 2;
+      }
+
+      // AMQP 绑定配置
+      message Amqp {
+        // Exchange 名称
+        // 参考: https://www.rabbitmq.com/tutorials/amqp-concepts.html#exchanges
+        string exchange = 1;
+
+        // Routing Key 模式
+        // 参考: https://www.rabbitmq.com/tutorials/amqp-concepts.html#bindings
+        string routing_key = 2;
+      }
+
+      // MQTT 绑定配置
+      message Mqtt {
+        // QoS 等级 (0, 1, 2)
+        // 0: 最多一次 (At most once)
+        // 1: 至少一次 (At least once)
+        // 2: 恰好一次 (Exactly once)
+        // 参考: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901234
+        int32 qos = 1;
+
+        // 是否保留消息
+        // true: Broker 会保留最后一条消息，新订阅者立即收到
+        // false: 普通消息，不保留
+        bool retain = 2;
+      }
+
+      // NATS 绑定配置 (占位)
+      message Nats {}
+
+      // RocketMQ 绑定配置
+      // 支持阿里云 RocketMQ 和开源 RocketMQ
+      message Rocketmq {
+        // 消息 Tag，用于消息过滤
+        // 例如: "ORDER_STATUS_CHANGE"
+        string tag = 1;
+
+        // 消息 Key，用于消息查询和去重
+        // 例如: 订单ID、用户ID
+        string key = 2;
+
+        // 消息类型
+        MessageType message_type = 3;
+
+        // 延时消息级别（仅当 message_type = DELAY 时有效）
+        // 阿里云 RocketMQ 延时级别：
+        // 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
+        int32 delay_level = 4;
+
+        // 消息类型枚举
+        enum MessageType {
+          // 普通消息
+          NORMAL = 0;
+
+          // 顺序消息（分区有序）
+          ORDER = 1;
+
+          // 事务消息
+          TRANSACTION = 2;
+
+          // 延时消息
+          DELAY = 3;
+        }
+      }
+    }
+  }
+}

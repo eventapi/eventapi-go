@@ -1,0 +1,206 @@
+{{define "client_amqp"}}
+// 类型别名 (方便用户使用，无需额外导入 transport 包)
+
+// Config 传输层配置
+type Config = amqp.Config
+
+// Channel 通道配置
+type Channel = amqp.Channel
+
+// OptionFn 配置选项函数类型
+type OptionFn = options.OptionFn[Config, amqp.Transport]
+
+// Client 是事件总线客户端接口
+type Client interface {
+{{- range .RPCs}}
+{{- if eq .Operation "SEND"}}
+	// New{{.Name}} 创建 {{.InputType}} 事件构建器
+	New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error)
+{{- else}}
+	// {{.Name}} 注册 {{.InputType}} 事件处理器
+	{{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error
+{{- end}}
+{{end -}}
+}
+
+// NewClient 创建新的事件总线客户端
+func NewClient(
+	ctx context.Context,
+	config Config,
+	optfns ...OptionFn,
+) (Client, error) {
+	opts := options.DefaultOptions[Config, amqp.Transport]()
+	for _, fn := range optfns {
+		fn(opts)
+	}
+
+	transportBuilder := amqp.New
+	if opts.TransportBuilder != nil {
+		transportBuilder = opts.TransportBuilder
+	}
+	tr, err := transportBuilder(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("create transport: %w", err)
+	}
+
+	return &client{
+		transport: tr,
+		opts:      opts,
+	}, nil
+}
+
+type client struct {
+	transport amqp.Transport
+	opts      *options.Options[Config, amqp.Transport]
+}
+
+func (c *client) newUUID() string {
+	if c.opts.UUIDGenerator != nil {
+		return c.opts.UUIDGenerator()
+	}
+	return uuid.Generate()
+}
+
+func (c *client) getCodec() codec.Codec {
+	if c.opts.Codec != nil {
+		return c.opts.Codec
+	}
+	return codec.NewJSON()
+}
+
+// buildExtensions 构建 CloudEvent Extensions
+func (c *client) buildExtensions(ctx context.Context) cloudevent.Extensions {
+	ext := make(cloudevent.Extensions)
+	if c.opts.MetadataExtractor != nil {
+		for k, v := range c.opts.MetadataExtractor(ctx) {
+			ext[k] = cloudevent.NewAttributeValue(v)
+		}
+	}
+	return ext
+}
+
+// sendWithExtensions 在发送时注入 Extensions (使用用户传入的 ctx)
+func (c *client) sendWithExtensions(ctx context.Context, ce *cloudevent.CloudEvent[[]byte], headers map[string]any, send func(context.Context, *cloudevent.CloudEvent[[]byte]) error) error {
+	ext := c.buildExtensions(ctx)
+	for k, v := range headers {
+		ext[k] = cloudevent.NewAttributeValue(v)
+	}
+	for k, v := range ce.Extensions {
+		ext[k] = v
+	}
+	ce.Extensions = ext
+	return send(ctx, ce)
+}
+
+// 事件类型定义
+
+{{range .UniqueMessages -}}
+{{if .Comment}}// {{.Comment}}{{else}}// {{.Name}} 事件结构体{{end}}
+type {{.Name}} struct {
+{{- range .Fields}}
+	{{if .Comment}}// {{.Comment}}{{else}}// {{.JSONTag}}{{end}}
+{{- if .IsHeader}}
+	{{.Name}} {{.Type}} `json:"-"`
+{{- else}}
+	{{.Name}} {{.Type}} `json:"{{.JSONTag}}"`
+{{- end}}
+{{- end}}
+}
+
+{{end -}}
+// Builder 类型定义
+
+{{range .SendMessages -}}
+// {{.Name}}Builder {{.Name}} 事件构建器
+type {{.Name}}Builder = amqp.EventBuilder[*{{.Name}}]
+
+{{end -}}
+{{range .ReceiveMessages -}}
+// Received{{.Name}} 接收到的 {{.Name}} 事件
+type Received{{.Name}} = amqp.ReceivedEvent[*{{.Name}}]
+
+{{end -}}
+// 操作方法实现
+
+{{range .RPCs -}}
+{{- if eq .Operation "SEND"}}
+
+// New{{.Name}} 创建 {{.InputType}} 事件构建器
+// Queue: {{.Channel.Address}}
+func (c *client) New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error) {
+	ch, err := c.transport.Channel(amqp.Channel{
+		Address: "{{.Channel.Address}}",
+		{{buildChannelBinding $.Protocol .Channel}}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create channel: %w", err)
+	}
+	headers := map[string]any{
+{{- if .MessageDef}}
+{{- range .MessageDef.HeaderFields}}
+		"{{.JSONTag}}": event.{{.Name}},
+{{- end}}
+{{- end}}
+	}
+	send := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte]) error {
+		return c.sendWithExtensions(ctx, ce, headers, ch.Send)
+	}
+	ce := &cloudevent.CloudEvent[*{{.InputType}}]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id:              c.newUUID(),
+			Source:          c.opts.GetSource(),
+			SpecVersion:     c.opts.GetSpecVersion(),
+			Type:            "{{.EventType}}",
+			DataContentType: {{if .MessageDef}}{{if .MessageDef.DataContentType}}"{{.MessageDef.DataContentType}}"{{else}}c.getCodec().ContentType(){{end}}{{else}}c.getCodec().ContentType(){{end}},
+			Time:            time.Now(),
+			Subject:         {{if .MessageDef}}{{with .MessageDef | getSubjectField}}{{printf "event.%s" .}}{{else}}""{{end}}{{else}}""{{end}},
+		},
+		Data: event,
+	}
+	return amqp.NewEventBuilder(ce, c.opts.Codec, send), nil
+}
+{{- else}}
+
+// {{.Name}} 注册 {{.InputType}} 事件处理器
+// Queue: {{.Channel.Address}}
+func (c *client) {{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error {
+	ch, err := c.transport.Channel(amqp.Channel{
+		Address: "{{.Channel.Address}}",
+		{{buildChannelBinding $.Protocol .Channel}}
+	})
+	if err != nil {
+		return fmt.Errorf("create channel: %w", err)
+	}
+	cd := c.getCodec()
+	return ch.OnReceive(ctx, func(ctx context.Context, re *amqp.ReceivedEvent[[]byte]) error {
+		event := &{{.InputType}}{}
+		if err := cd.Decode(re.Event.Data, event); err != nil {
+			return err
+		}
+{{- if .MessageDef}}
+{{- range .MessageDef.HeaderFields}}
+		if v, ok := re.Event.Extensions.Get("{{.JSONTag}}"); ok {
+{{- if eq .Type "string"}}
+			if s, _ := v.AsString(); s != "" {
+				event.{{.Name}} = s
+			}
+{{- else}}
+			event.{{.Name}} = {{.Type}}(v.String())
+{{- end}}
+		}
+{{- end}}
+{{- end}}
+		ce := &cloudevent.CloudEvent[*{{.InputType}}]{
+			CloudEventMetadata: re.Event.CloudEventMetadata,
+			Data:               event,
+		}
+		received := Received{{.InputType}}{
+			Event: ce,
+			Ack:   re.Ack,
+		}
+		return handler(ctx, &received)
+	})
+}
+{{- end}}
+{{end -}}
+{{end}}
