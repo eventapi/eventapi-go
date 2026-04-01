@@ -1,0 +1,141 @@
+services:
+  # ==================== Kafka ====================
+  kafka:
+    image: confluentinc/confluent-local:7.5.0
+    container_name: eventapi-kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_NODE_ID: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ==================== RabbitMQ (AMQP) ====================
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: eventapi-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ==================== StarRocks ====================
+  starrocks:
+    image: registry.cn-hangzhou.aliyuncs.com/starrocks/starrocks-fe:3.1.0
+    container_name: eventapi-starrocks
+    ports:
+      - "9030:9030"
+      - "8030:8030"
+    environment:
+      FE_CONF_http_port: 8030
+      FE_CONF_query_port: 9030
+      FE_CONF_edit_log_port: 9010
+      JAVA_OPTS: "-Xmx1024m -Xms1024m -XX:+UseG1GC"
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "127.0.0.1", "-P", "9030", "-uroot", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  starrocks-be:
+    image: registry.cn-hangzhou.aliyuncs.com/starrocks/starrocks-be:3.1.0
+    container_name: eventapi-starrocks-be
+    ports:
+      - "8040:8040"
+      - "9050:9050"
+    environment:
+      BE_CONF_be_port: 9050
+      BE_CONF_webserver_port: 8040
+      BE_CONF_heartbeat_service_port: 9050
+      BE_CONF_storage_root_path: /opt/starrocks/storage
+      JAVA_OPTS: "-Xmx1024m -Xms1024m -XX:+UseG1GC"
+    depends_on:
+      starrocks:
+        condition: service_healthy
+
+  # ==================== Flink ====================
+  flink-jobmanager:
+    image: registry.cn-hangzhou.aliyuncs.com/flink/flink:1.18.1-scala_2.12
+    container_name: eventapi-flink-jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      FLINK_ENV_JAVA_OPTS: "-Dfile.encoding=UTF-8"
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+    command: jobmanager
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  flink-taskmanager:
+    image: registry.cn-hangzhou.aliyuncs.com/flink/flink:1.18.1-scala_2.12
+    container_name: eventapi-flink-taskmanager
+    environment:
+      FLINK_ENV_JAVA_OPTS: "-Dfile.encoding=UTF-8"
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    scale: 1
+
+  # ==================== RocketMQ ====================
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: eventapi-rocketmq-namesrv
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+    environment:
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9876"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.1
+    container_name: eventapi-rocketmq-broker
+    command: sh mqbroker -n rocketmq-namesrv:9876 --enable-proxy
+    ports:
+      - "10911:10911"
+      - "8081:8081"
+    environment:
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m"
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/10911"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s

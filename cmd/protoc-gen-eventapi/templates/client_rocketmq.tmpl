@@ -1,0 +1,269 @@
+{{define "client_rocketmq"}}
+// 类型别名 (方便用户使用，无需额外导入 transport 包)
+
+// Config 传输层配置
+type Config = rocketmq.Config
+
+// Channel 通道配置
+type Channel = rocketmq.Channel
+
+// Client 是事件总线客户端接口
+type Client interface {
+{{- range .RPCs}}
+{{- if eq .Operation "SEND"}}
+	// New{{.Name}} 创建 {{.InputType}} 事件构建器
+	New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error)
+{{- else}}
+	// {{.Name}} 注册 {{.InputType}} 事件处理器
+	{{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error
+{{- end}}
+{{end -}}
+}
+
+// ClientBuilder 客户端构建器。
+type ClientBuilder struct {
+	config      Config
+	source      string
+	specVersion string
+	codec       codec.Codec
+	extFn       cloudevent.ExtensionsProvider
+	transportFn func(context.Context, Config) (rocketmq.Transport, error)
+}
+
+// NewClientBuilder 创建客户端构建器。
+func NewClientBuilder(config Config) *ClientBuilder {
+	return &ClientBuilder{
+		config:      config,
+		specVersion: "1.0",
+		codec:       codec.NewJSON(),
+		transportFn: rocketmq.New,
+	}
+}
+
+// WithSource 设置 CloudEvent 事件来源标识。
+func (b *ClientBuilder) WithSource(source string) *ClientBuilder {
+	b.source = source
+	return b
+}
+
+// WithSpecVersion 设置 CloudEvents 规范版本。
+func (b *ClientBuilder) WithSpecVersion(version string) *ClientBuilder {
+	b.specVersion = version
+	return b
+}
+
+// WithCodec 设置编解码器。
+func (b *ClientBuilder) WithCodec(c codec.Codec) *ClientBuilder {
+	b.codec = c
+	return b
+}
+
+// WithExtensionsProvider 设置扩展属性提供者。
+//
+// 使用场景：
+//   当需要在每个发出的事件中包含动态上下文信息（如链路追踪 ID、用户 ID、租户 ID 等）时，
+//   可以通过此方法注册一个提供者函数。该函数会在每次调用 Send() 时被执行。
+//
+// 示例：
+//   client.WithExtensionsProvider(func(ctx context.Context) cloudevent.Extensions {
+//       return cloudevent.Extensions{
+//           "trace_id": cloudevent.NewAttributeValue(traceIDFromContext(ctx)),
+//           "tenant_id": cloudevent.NewAttributeValue("tenant-123"),
+//       }
+//   })
+//
+// 注意事项：
+//   1. 该函数会在每次发送事件时调用，请避免在其中执行耗时操作。
+//   2. 返回的 Extensions 会与事件构建时已有的 Extensions 合并，冲突时以返回的为准。
+func (b *ClientBuilder) WithExtensionsProvider(fn cloudevent.ExtensionsProvider) *ClientBuilder {
+	b.extFn = fn
+	return b
+}
+
+// WithTransportBuilder 设置自定义 Transport 工厂函数。
+func (b *ClientBuilder) WithTransportBuilder(fn func(context.Context, Config) (rocketmq.Transport, error)) *ClientBuilder {
+	b.transportFn = fn
+	return b
+}
+
+// Build 构建客户端。
+func (b *ClientBuilder) Build(ctx context.Context) (Client, error) {
+	tr, err := b.transportFn(ctx, b.config)
+	if err != nil {
+		return nil, fmt.Errorf("create transport: %w", err)
+	}
+	return &client{
+		transport:   tr,
+		source:      b.source,
+		specVersion: b.specVersion,
+		codec:       b.codec,
+		extFn:       b.extFn,
+	}, nil
+}
+
+// NewClient 创建新的事件总线客户端 (NewClientBuilder 的快捷方式)。
+func NewClient(ctx context.Context, config Config, optfns ...func(*ClientBuilder)) (Client, error) {
+	b := NewClientBuilder(config)
+	for _, fn := range optfns {
+		fn(b)
+	}
+	return b.Build(ctx)
+}
+
+type client struct {
+	transport   rocketmq.Transport
+	source      string
+	specVersion string
+	codec       codec.Codec
+	extFn       cloudevent.ExtensionsProvider
+}
+
+func (c *client) newUUID() string {
+	return uuid.Generate()
+}
+
+func (c *client) getCodec() codec.Codec {
+	return c.codec
+}
+
+// buildExtensions 构建 CloudEvent Extensions
+func (c *client) buildExtensions(ctx context.Context) cloudevent.Extensions {
+	if c.extFn != nil {
+		return c.extFn(ctx)
+	}
+	return nil
+}
+
+// sendWithExtensions 在发送时注入 Extensions (使用用户传入的 ctx)
+func (c *client) sendWithExtensions(ctx context.Context, ce *cloudevent.CloudEvent[[]byte], headers map[string]any, send func(context.Context, *cloudevent.CloudEvent[[]byte]) error) error {
+	ext := c.buildExtensions(ctx)
+	if ext == nil {
+		ext = make(cloudevent.Extensions)
+	}
+	for k, v := range headers {
+		ext[k] = cloudevent.NewAttributeValue(v)
+	}
+	for k, v := range ce.Extensions {
+		ext[k] = v
+	}
+	ce.Extensions = ext
+	return send(ctx, ce)
+}
+
+// 事件类型定义
+
+{{range .UniqueMessages -}}
+{{if .Comment}}// {{.Comment}}{{else}}// {{.Name}} 事件结构体{{end}}
+type {{.Name}} struct {
+{{- range .Fields}}
+	{{if .Comment}}// {{.Comment}}{{else}}// {{.JSONTag}}{{end}}
+{{- if .IsHeader}}
+	{{.Name}} {{.Type}} `json:"-"`
+{{- else}}
+	{{.Name}} {{.Type}} `json:"{{.JSONTag}}"`
+{{- end}}
+{{- end}}
+}
+
+{{end -}}
+// Builder 类型定义
+
+{{range .SendMessages -}}
+// {{.Name}}Builder {{.Name}} 事件构建器
+type {{.Name}}Builder = rocketmq.EventBuilder[*{{.Name}}]
+
+{{end -}}
+{{range .ReceiveMessages -}}
+// Received{{.Name}} 接收到的 {{.Name}} 事件
+type Received{{.Name}} = rocketmq.ReceivedEvent[*{{.Name}}]
+
+{{end -}}
+// 操作方法实现
+
+{{range .RPCs -}}
+{{- if eq .Operation "SEND"}}
+
+// New{{.Name}} 创建 {{.InputType}} 事件构建器
+// Topic: {{.Channel.Address}}
+func (c *client) New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error) {
+	ch, err := c.transport.Channel(rocketmq.Channel{
+		Address: "{{.Channel.Address}}",
+		{{buildChannelBinding $.Protocol .Channel}}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create channel: %w", err)
+	}
+	headers := map[string]any{
+{{- if .MessageDef}}
+{{- range .MessageDef.HeaderFields}}
+		"{{.JSONTag}}": event.{{.Name}},
+{{- end}}
+{{- end}}
+	}
+	send := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte]) error {
+		return c.sendWithExtensions(ctx, ce, headers, ch.Send)
+	}
+	sendTx := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte], callback func(context.Context) error) error {
+		return c.sendWithExtensions(ctx, ce, headers, func(ctx2 context.Context, ce2 *cloudevent.CloudEvent[[]byte]) error {
+			return ch.SendTransaction(ctx2, ce2, callback)
+		})
+	}
+	ce := &cloudevent.CloudEvent[*{{.InputType}}]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id:              c.newUUID(),
+			Source:          c.source,
+			SpecVersion:     c.specVersion,
+			Type:            "{{.EventType}}",
+			DataContentType: {{if .MessageDef}}{{if .MessageDef.DataContentType}}"{{.MessageDef.DataContentType}}"{{else}}c.getCodec().ContentType(){{end}}{{else}}c.getCodec().ContentType(){{end}},
+			Time:            time.Now(),
+			Subject:         {{if .MessageDef}}{{with .MessageDef | getSubjectField}}{{printf "event.%s" .}}{{else}}""{{end}}{{else}}""{{end}},
+		},
+		Data: event,
+	}
+	return rocketmq.NewEventBuilder(ce, c.codec, send, sendTx), nil
+}
+{{- else}}
+
+// {{.Name}} 注册 {{.InputType}} 事件处理器
+// Topic: {{.Channel.Address}}
+func (c *client) {{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error {
+	ch, err := c.transport.Channel(rocketmq.Channel{
+		Address: "{{.Channel.Address}}",
+		{{buildChannelBinding $.Protocol .Channel}}
+	})
+	if err != nil {
+		return fmt.Errorf("create channel: %w", err)
+	}
+	cd := c.getCodec()
+	return ch.OnReceive(ctx, func(ctx context.Context, re *rocketmq.ReceivedEvent[[]byte]) error {
+		event := &{{.InputType}}{}
+		if err := cd.Decode(re.Event.Data, event); err != nil {
+			return err
+		}
+{{- if .MessageDef}}
+{{- range .MessageDef.HeaderFields}}
+		if v, ok := re.Event.Extensions.Get("{{.JSONTag}}"); ok {
+{{- if eq .Type "string"}}
+			if s, _ := v.AsString(); s != "" {
+				event.{{.Name}} = s
+			}
+{{- else}}
+			event.{{.Name}} = {{.Type}}(v.String())
+{{- end}}
+		}
+{{- end}}
+{{- end}}
+		ce := &cloudevent.CloudEvent[*{{.InputType}}]{
+			CloudEventMetadata: re.Event.CloudEventMetadata,
+			Data:               event,
+		}
+		received := Received{{.InputType}}{
+			Event: ce,
+			Ack:   re.Ack,
+		}
+		return handler(ctx, &received)
+	})
+}
+{{- end}}
+{{end -}}
+{{end}}

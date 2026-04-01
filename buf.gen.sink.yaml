@@ -1,0 +1,12 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/eventapi/eventapi-go
+    - file_option: go_package
+      value: github.com/eventapi/eventapi-go/pkg/eventapi/v1;eventapiv1
+plugins:
+  - local: protoc-gen-eventapi-sink
+    out: examples/gen/sink
+    opt: target=flink
