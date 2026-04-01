@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package multi.events.v1;
+
+import "eventapi/v1/eventapi.proto";
+import "eventapi/v1/cloudevent.proto";
+import "eventapi/v1/sink.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/multi/events-go/examples/v1;multieventv1";
+
+// MultiProtocolEventBus 多协议事件总线服务
+// 声明支持多个协议，会为每个协议生成独立的 SDK
+service MultiProtocolEventBus {
+  option (eventapi.v1.server) = {
+    protocols: [
+      { name: "kafka", version: "3.5.0" },
+      { name: "amqp", version: "0.9.1" },
+      { name: "rocketmq", version: "5.0.0" }
+    ]
+  };
+
+  // 发送订单事件
+  rpc SendOrder(OrderEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: SEND
+      channel: {
+        address: "order.events"
+        description: "订单事件通道"
+        binding: {
+          amqp: {
+            exchange: "order.exchange"
+            routing_key: "order.created"
+          }
+        }
+      }
+    };
+    option (eventapi.v1.sink) = {
+      target: SINK_TYPE_STARROCKS
+      database: "analytics"
+      table: "order_events"
+      source_topic: "order.events"
+      event_data_content_type: CONTENT_TYPE_JSON
+      primary_key: ["event_id"]
+      partition_key: ["event_time"]
+      mapping: [
+        { header_path: "ce_id",        target_column: "event_id",    type: COLUMN_TYPE_VARCHAR,    not_null: true },
+        { header_path: "ce_type",      target_column: "event_type",  type: COLUMN_TYPE_VARCHAR },
+        { header_path: "ce_source",    target_column: "event_source",type: COLUMN_TYPE_VARCHAR },
+        { header_path: "ce_time",      target_column: "event_time",  type: COLUMN_TYPE_TIMESTAMP },
+        { header_path: "ce_subject",   target_column: "subject",     type: COLUMN_TYPE_VARCHAR },
+        { data_path: "$.order_id",     target_column: "order_id",    type: COLUMN_TYPE_VARCHAR,    not_null: true },
+        { data_path: "$.user_id",      target_column: "user_id",     type: COLUMN_TYPE_VARCHAR },
+        { data_path: "$.order_amount", target_column: "order_amount",type: COLUMN_TYPE_BIGINT },
+        { data_path: "$.order_status", target_column: "order_status",type: COLUMN_TYPE_VARCHAR }
+      ]
+    };
+  }
+
+  // 接收订单事件
+  rpc ReceiveOrder(OrderEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: RECEIVE
+      channel: {
+        address: "order.events"
+        description: "订单事件接收通道"
+      }
+    };
+  }
+
+  // 发送支付事件
+  rpc SendPayment(PaymentEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: SEND
+      channel: {
+        address: "payment.events"
+        description: "支付事件通道"
+      }
+    };
+    option (eventapi.v1.sink) = {
+      target: SINK_TYPE_STARROCKS
+      database: "analytics"
+      table: "payment_events"
+      source_topic: "payment.events"
+      event_data_content_type: CONTENT_TYPE_JSON
+      primary_key: ["event_id"]
+      partition_key: ["event_time"]
+      mapping: [
+        { header_path: "ce_id",        target_column: "event_id",    type: COLUMN_TYPE_VARCHAR,    not_null: true },
+        { header_path: "ce_type",      target_column: "event_type",  type: COLUMN_TYPE_VARCHAR },
+        { header_path: "ce_source",    target_column: "event_source",type: COLUMN_TYPE_VARCHAR },
+        { header_path: "ce_time",      target_column: "event_time",  type: COLUMN_TYPE_TIMESTAMP },
+        { header_path: "ce_subject",   target_column: "subject",     type: COLUMN_TYPE_VARCHAR },
+        { data_path: "$.payment_id",   target_column: "payment_id",  type: COLUMN_TYPE_VARCHAR,    not_null: true },
+        { data_path: "$.order_id",     target_column: "order_id",    type: COLUMN_TYPE_VARCHAR },
+        { data_path: "$.amount",       target_column: "amount",      type: COLUMN_TYPE_BIGINT },
+        { data_path: "$.status",       target_column: "status",      type: COLUMN_TYPE_VARCHAR }
+      ]
+    };
+  }
+
+  // 接收支付事件
+  rpc ReceivePayment(PaymentEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: RECEIVE
+      channel: {
+        address: "payment.events"
+        description: "支付事件接收通道"
+      }
+    };
+  }
+}
+
+// OrderEvent 订单事件
+message OrderEvent {
+  option (eventapi.v1.event_type) = "multi.order.event.v1";
+  option (eventapi.v1.event_data_content_type) = CONTENT_TYPE_JSON;
+
+  string order_id = 1 [(eventapi.v1.is_event_subject) = true];
+  google.protobuf.Timestamp event_time = 2;
+  string user_id = 3;
+  int64 order_amount = 4;
+  string order_status = 5;
+}
+
+// PaymentEvent 支付事件
+message PaymentEvent {
+  option (eventapi.v1.event_type) = "multi.payment.event.v1";
+  option (eventapi.v1.event_data_content_type) = CONTENT_TYPE_JSON;
+
+  string payment_id = 1 [(eventapi.v1.is_event_subject) = true];
+  google.protobuf.Timestamp event_time = 2;
+  string order_id = 3;
+  int64 amount = 4;
+  string status = 5;
+}

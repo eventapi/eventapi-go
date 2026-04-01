@@ -1,0 +1,12 @@
+version: v2
+modules:
+  - path: proto
+    name: buf.build/eventapi/eventapi
+  - path: examples/proto
+    name: buf.build/eventapi/examples
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
