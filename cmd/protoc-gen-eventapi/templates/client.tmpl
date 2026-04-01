@@ -1,0 +1,176 @@
+{{define "client"}}
+// ============================================
+// 类型别名 (方便用户使用，无需额外导入 transport 包)
+// ============================================
+
+// Config 传输层配置
+type Config = {{.Protocol | transportConfig}}
+
+// Channel 通道配置
+type Channel = {{.Protocol | transportChannel}}
+
+// OptionFn 配置选项函数类型
+type OptionFn = options.OptionFn[Config, Channel]
+
+// ============================================
+// 事件总线客户端接口
+// ============================================
+
+// Client 是事件总线客户端接口
+type Client interface {
+{{- range .RPCs}}
+{{- if eq .Operation "SEND"}}
+	// New{{.Name}} 创建 {{.InputType}} 事件构建器
+	New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error)
+{{- else}}
+	// {{.Name}} 注册 {{.InputType}} 事件处理器
+	{{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error
+{{- end}}
+{{end -}}
+}
+
+// ============================================
+// 构造函数
+// ============================================
+
+// NewClient 创建新的事件总线客户端
+func NewClient(
+	ctx context.Context,
+	config Config,
+	optfns ...OptionFn,
+) (Client, error) {
+	opts := options.DefaultOptions[Config, Channel]()
+	for _, fn := range optfns {
+		fn(opts)
+	}
+
+    transportBuilder := {{.Protocol | transportPackage}}.New
+	if opts.TransportBuilder != nil {
+		transportBuilder = opts.TransportBuilder
+	}
+    tr, err := transportBuilder(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("create transport: %w", err)
+	}
+
+	return &client{
+		transport: tr,
+		opts:      opts,
+	}, nil
+}
+
+// ============================================
+// Client 实现
+// ============================================
+
+type client struct {
+	transport transport.Transport[Channel]
+	opts      *options.Options[Config, Channel]
+}
+
+func (c *client) newUUID() string {
+	if c.opts != nil && c.opts.UUIDGenerator != nil {
+		return c.opts.UUIDGenerator()
+	}
+	return uuid.Generate()
+}
+
+func (c *client) getCodec() codec.Codec {
+	if c.opts != nil && c.opts.Codec != nil {
+		return c.opts.Codec
+	}
+	return codec.NewJSON()
+}
+
+// ============================================
+// 事件类型定义
+// ============================================
+
+{{range .UniqueMessages -}}
+{{if .Comment}}// {{.Comment}}{{else}}// {{.Name}} 事件结构体{{end}}
+type {{.Name}} struct {
+{{- range .Fields}}
+	{{if .Comment}}// {{.Comment}}{{else}}// {{.JSONTag}}{{end}}
+	{{.Name}} {{.Type}} `json:"{{.JSONTag}}"`
+{{- end}}
+}
+
+{{end -}}
+// ============================================
+// Builder 类型定义
+// ============================================
+
+{{range .SendMessages -}}
+// {{.Name}}Builder {{.Name}} 事件构建器
+type {{.Name}}Builder = {{$.Protocol | builderType}}[*{{.Name}}]
+
+{{end -}}
+// ============================================
+// Received 类型
+// ============================================
+
+{{range .ReceiveMessages -}}
+// Received{{.Name}} 接收到的 {{.Name}} 事件
+type Received{{.Name}} = {{$.Protocol | transportPackage}}.ReceivedEvent[*{{.Name}}]
+
+{{end -}}
+// ============================================
+// 操作方法实现
+// ============================================
+
+{{range .RPCs -}}
+{{- if eq .Operation "SEND"}}
+
+// New{{.Name}} 创建 {{.InputType}} 事件构建器
+// {{$.Protocol | channelAddrComment}}: {{.Channel.Address}}
+func (c *client) New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error) {
+	ch, err := c.transport.Channel({{$.Protocol | transportChannel}}{
+		Address: "{{.Channel.Address}}",
+		{{buildChannelBinding $.Protocol .Channel}}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create channel: %w", err)
+	}
+	ce := &cloudevent.CloudEvent[*{{.InputType}}]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id:              c.newUUID(),
+			Source:          c.opts.GetSource(),
+			SpecVersion:     c.opts.GetSpecVersion(),
+			Type:            "{{.EventType}}",
+			DataContentType: c.getCodec().ContentType(),
+			Time:            time.Now(),
+			Subject:         {{if .MessageDef}}{{.MessageDef | getSubjectField | printf "event.%s"}}{{else}}""{{end}},
+		},
+		Data: event,
+	}
+{{- if eq $.Protocol "rocketmq"}}
+	return {{$.Protocol | transportPackage}}.NewEventBuilder(ce, c.opts.Codec, ch.Send, ch.SendTransaction), nil
+{{- else}}
+	return {{$.Protocol | transportPackage}}.NewEventBuilder(ce, c.opts.Codec, ch.Send), nil
+{{- end}}
+}
+{{- else}}
+
+// {{.Name}} 注册 {{.InputType}} 事件处理器
+// {{$.Protocol | channelAddrComment}}: {{.Channel.Address}}
+func (c *client) {{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error {
+	ch, err := c.transport.Channel({{$.Protocol | transportChannel}}{
+		Address: "{{.Channel.Address}}",
+		{{buildChannelBinding $.Protocol .Channel}}
+	})
+	if err != nil {
+		return fmt.Errorf("create channel: %w", err)
+	}
+	cd := c.getCodec()
+	return ch.OnReceive(ctx, func(ctx context.Context, re *transport.ReceivedEvent[[]byte]) error {
+		ce, err := cloudevent.DecodeAndWrap[{{.InputType}}](re.Event.Data, cd, re.Event.CloudEventMetadata)
+		if err != nil {
+			return err
+		}
+		received := Received{{.InputType}}{Event: ce}
+		return handler(ctx, &received)
+	})
+}
+{{- end}}
+{{end -}}
+{{end}}

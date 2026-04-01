@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package multi.events.v1;
+
+import "eventapi/v1/eventapi.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/multi/events-go/examples/v1;multieventv1";
+
+// MultiProtocolEventBus 多协议事件总线服务
+// 声明支持多个协议，会为每个协议生成独立的 SDK
+service MultiProtocolEventBus {
+  option (eventapi.v1.server) = {
+    protocols: [
+      { name: "kafka", version: "3.5.0" },
+      { name: "amqp", version: "0.9.1" },
+      { name: "rocketmq", version: "5.0.0" }
+    ]
+  };
+
+  // 发送订单事件
+  rpc SendOrder(OrderEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: SEND
+      channel: {
+        address: "order.events"
+        description: "订单事件通道"
+        binding: {
+          amqp: {
+            exchange: "order.exchange"
+            routing_key: "order.created"
+          }
+        }
+      }
+    };
+  }
+
+  // 接收订单事件
+  rpc ReceiveOrder(OrderEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: RECEIVE
+      channel: {
+        address: "order.events"
+        description: "订单事件接收通道"
+      }
+    };
+  }
+
+  // 发送支付事件
+  rpc SendPayment(PaymentEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: SEND
+      channel: {
+        address: "payment.events"
+        description: "支付事件通道"
+      }
+    };
+  }
+
+  // 接收支付事件
+  rpc ReceivePayment(PaymentEvent) returns (google.protobuf.Empty) {
+    option (eventapi.v1.operation) = {
+      action: RECEIVE
+      channel: {
+        address: "payment.events"
+        description: "支付事件接收通道"
+      }
+    };
+  }
+}
+
+// OrderEvent 订单事件
+message OrderEvent {
+  option (eventapi.v1.event_type) = "multi.order.event.v1";
+
+  string order_id = 1 [(eventapi.v1.is_subject) = true];
+  google.protobuf.Timestamp event_time = 2;
+  string user_id = 3;
+  int64 order_amount = 4;
+  string order_status = 5;
+}
+
+// PaymentEvent 支付事件
+message PaymentEvent {
+  option (eventapi.v1.event_type) = "multi.payment.event.v1";
+
+  string payment_id = 1 [(eventapi.v1.is_subject) = true];
+  google.protobuf.Timestamp event_time = 2;
+  string order_id = 3;
+  int64 amount = 4;
+  string status = 5;
+}

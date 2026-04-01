@@ -1,0 +1,4 @@
+version: v2
+plugins:
+  - local: ../bin/protoc-gen-eventapi
+    out: ./gen

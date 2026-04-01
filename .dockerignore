@@ -1,0 +1,7 @@
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo

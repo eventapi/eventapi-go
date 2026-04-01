@@ -1,0 +1,9 @@
+version: v2
+deps:
+  - buf.build/eventapi/eventapi
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
