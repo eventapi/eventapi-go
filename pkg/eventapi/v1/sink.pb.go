@@ -116,13 +116,12 @@
 package eventapiv1
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	descriptorpb "google.golang.org/protobuf/types/descriptorpb"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -620,7 +619,7 @@ var File_eventapi_v1_sink_proto protoreflect.FileDescriptor
 
 const file_eventapi_v1_sink_proto_rawDesc = "" +
 	"\n" +
-	"\x16eventapi/v1/sink.proto\x12\veventapi.v1\x1a google/protobuf/descriptor.proto\x1a\x1ceventapi/v1/cloudevent.proto\"\x87\x04\n" +
+	"\x16eventapi/v1/sink.proto\x12\veventapi.v1\x1a\x1ceventapi/v1/cloudevent.proto\x1a google/protobuf/descriptor.proto\"\x87\x04\n" +
 	"\bSinkRule\x12-\n" +
 	"\x06target\x18\x01 \x01(\x0e2\x15.eventapi.v1.SinkTypeR\x06target\x12\x1a\n" +
 	"\bdatabase\x18\x02 \x01(\tR\bdatabase\x12\x14\n" +

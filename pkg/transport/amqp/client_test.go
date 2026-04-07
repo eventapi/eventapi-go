@@ -364,6 +364,39 @@ func TestConcurrentClose(t *testing.T) {
 	wg.Wait()
 }
 
+func TestSendWithDisabled(t *testing.T) {
+	tr := &amqpTransport{
+		config: Config{Enabled: false},
+	}
+	ch := &amqpChannel{transport: tr}
+
+	event := &cloudevent.CloudEvent[[]byte]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id: "test-id", Source: "test", SpecVersion: "1.0", Type: "test.v1",
+		},
+		Data: []byte(`{"key":"value"}`),
+	}
+
+	err := ch.Send(context.Background(), event)
+	if err != nil {
+		t.Errorf("Send() with Enabled=false should return nil, got: %v", err)
+	}
+}
+
+func TestOnReceiveWithDisabled(t *testing.T) {
+	tr := &amqpTransport{
+		config: Config{Enabled: false},
+	}
+	ch := &amqpChannel{transport: tr}
+
+	err := ch.OnReceive(context.Background(), func(ctx context.Context, event *ReceivedEvent[[]byte]) error {
+		return nil
+	})
+	if err != nil {
+		t.Errorf("OnReceive() with Enabled=false should return nil, got: %v", err)
+	}
+}
+
 type TestData struct {
 	Name string `json:"name"`
 }

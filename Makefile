@@ -1,4 +1,4 @@
-.PHONY: all build clean install test proto
+.PHONY: all build clean install test proto generate fmt
 
 BIN_DIR=./bin
 CMD_DIR=./cmd
@@ -20,7 +20,14 @@ test:
 	@echo "Running tests..."
 	go test ./...
 
-fmt:
+install:
+	go install -ldflags="-s -w" $(CMD_DIR)/protoc-gen-eventapi@latest
+	go install -ldflags="-s -w" $(CMD_DIR)/protoc-gen-eventapi-sink@latest
+
+generate: build
+	export PATH="$(BIN_DIR):$$PATH" && buf generate
+
+	fmt:
 	goimports -w . .
 	gofmt -w -s .
-	buf format proto -w -v
+	buf format proto examples/proto -w -v

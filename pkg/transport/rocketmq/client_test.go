@@ -412,4 +412,58 @@ type TestData struct {
 	Name string `json:"name"`
 }
 
+func TestSendWithDisabled(t *testing.T) {
+	tr := &rocketmqTransport{
+		config: Config{Enabled: false},
+	}
+	ch := &rocketmqChannel{transport: tr}
+
+	event := &cloudevent.CloudEvent[[]byte]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id: "test-id", Source: "test", SpecVersion: "1.0", Type: "test.v1",
+		},
+		Data: []byte(`{"key":"value"}`),
+	}
+
+	err := ch.Send(context.Background(), event)
+	if err != nil {
+		t.Errorf("Send() with Enabled=false should return nil, got: %v", err)
+	}
+}
+
+func TestSendTransactionWithDisabled(t *testing.T) {
+	tr := &rocketmqTransport{
+		config: Config{Enabled: false},
+	}
+	ch := &rocketmqChannel{transport: tr}
+
+	event := &cloudevent.CloudEvent[[]byte]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id: "test-id", Source: "test", SpecVersion: "1.0", Type: "test.v1",
+		},
+		Data: []byte(`{"key":"value"}`),
+	}
+
+	err := ch.SendTransaction(context.Background(), event, func(ctx context.Context) error {
+		return nil
+	})
+	if err != nil {
+		t.Errorf("SendTransaction() with Enabled=false should return nil, got: %v", err)
+	}
+}
+
+func TestOnReceiveWithDisabled(t *testing.T) {
+	tr := &rocketmqTransport{
+		config: Config{Enabled: false},
+	}
+	ch := &rocketmqChannel{transport: tr}
+
+	err := ch.OnReceive(context.Background(), func(ctx context.Context, event *ReceivedEvent[[]byte]) error {
+		return nil
+	})
+	if err != nil {
+		t.Errorf("OnReceive() with Enabled=false should return nil, got: %v", err)
+	}
+}
+
 var now = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)

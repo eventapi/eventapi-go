@@ -14,3 +14,5 @@ plugins:
   - local: protoc-gen-eventapi
     out: examples/gen
     opt: paths=source_relative
+  - local: protoc-gen-eventapi-sink
+    out: examples/gen

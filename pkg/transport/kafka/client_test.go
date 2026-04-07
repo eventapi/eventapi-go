@@ -258,3 +258,57 @@ func TestOnReceiveWithoutGroupID(t *testing.T) {
 		t.Error("OnReceive() without GroupID should return error")
 	}
 }
+
+func TestSendWithDisabled(t *testing.T) {
+	tr, err := New(context.Background(), Config{
+		Brokers: []string{"localhost:9092"},
+		Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	defer tr.Close()
+
+	ch, err := tr.Channel(Channel{Address: "test.topic"})
+	if err != nil {
+		t.Fatalf("Channel() error: %v", err)
+	}
+
+	event := &cloudevent.CloudEvent[[]byte]{
+		CloudEventMetadata: cloudevent.CloudEventMetadata{
+			Id:          "test-id",
+			Source:      "test",
+			SpecVersion: "1.0",
+			Type:        "test.v1",
+		},
+		Data: []byte(`{"key":"value"}`),
+	}
+
+	err = ch.Send(context.Background(), event)
+	if err != nil {
+		t.Errorf("Send() with Enabled=false should return nil, got: %v", err)
+	}
+}
+
+func TestOnReceiveWithDisabled(t *testing.T) {
+	tr, err := New(context.Background(), Config{
+		Brokers: []string{"localhost:9092"},
+		Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+	defer tr.Close()
+
+	ch, err := tr.Channel(Channel{Address: "test.topic"})
+	if err != nil {
+		t.Fatalf("Channel() error: %v", err)
+	}
+
+	err = ch.(*kafkaChannel).OnReceive(context.Background(), func(ctx context.Context, event *ReceivedEvent[[]byte]) error {
+		return nil
+	})
+	if err != nil {
+		t.Errorf("OnReceive() with Enabled=false should return nil, got: %v", err)
+	}
+}

@@ -64,14 +64,13 @@
 package eventapiv1
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	descriptorpb "google.golang.org/protobuf/types/descriptorpb"
 	_ "google.golang.org/protobuf/types/known/timestamppb"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -835,7 +834,7 @@ var File_eventapi_v1_eventapi_proto protoreflect.FileDescriptor
 
 const file_eventapi_v1_eventapi_proto_rawDesc = "" +
 	"\n" +
-	"\x1aeventapi/v1/eventapi.proto\x12\veventapi.v1\x1a google/protobuf/descriptor.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1ceventapi/v1/cloudevent.proto\"I\n" +
+	"\x1aeventapi/v1/eventapi.proto\x12\veventapi.v1\x1a\x1ceventapi/v1/cloudevent.proto\x1a google/protobuf/descriptor.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"I\n" +
 	"\x12AsyncApiServerRule\x123\n" +
 	"\tprotocols\x18\x01 \x03(\v2\x15.eventapi.v1.ProtocolR\tprotocols\"8\n" +
 	"\bProtocol\x12\x12\n" +

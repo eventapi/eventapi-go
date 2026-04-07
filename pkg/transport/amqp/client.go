@@ -87,6 +87,11 @@ type Config struct {
 	// Channel 从池中获取，用完后归还，避免频繁创建销毁。
 	// 设为 0 时退化为每次发送创建新 Channel。
 	PoolSize int
+
+	// Enabled 是否启用此传输通道。
+	// false 时 Send() 静默跳过，OnReceive() 不启动消费者。
+	// 注意: Go bool 零值为 false，需显式设为 true 启用
+	Enabled bool
 }
 
 // Channel 是 IDL 生成的 Channel 类型别名
@@ -106,7 +111,7 @@ type amqpTransport struct {
 // amqpChannel AMQP 通道实现
 type amqpChannel struct {
 	transport   *amqpTransport
-	channel     Channel
+	channel     *eventapiv1.OperationRule_Channel
 	consumerTag string
 	deliveries  <-chan amqp091.Delivery
 	once        sync.Once
@@ -170,7 +175,7 @@ func (t *amqpTransport) Channel(ch Channel) (TransportChannel, error) {
 
 	chObj := &amqpChannel{
 		transport: t,
-		channel:   ch,
+		channel:   &ch,
 	}
 	t.channels[ch.Address] = chObj
 	return chObj, nil
@@ -259,6 +264,9 @@ func cloudEventToAMQPHeaders(event *cloudevent.CloudEvent[[]byte]) amqp091.Table
 }
 
 func (c *amqpChannel) Send(ctx context.Context, event *cloudevent.CloudEvent[[]byte]) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
 	if c.transport.closing.Load() {
 		return fmt.Errorf("transport is closing")
 	}
@@ -337,6 +345,9 @@ func (c *amqpChannel) Send(ctx context.Context, event *cloudevent.CloudEvent[[]b
 
 // OnReceive 注册接收处理器
 func (c *amqpChannel) OnReceive(ctx context.Context, handle func(context.Context, *ReceivedEvent[[]byte]) error) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
 	c.once.Do(func() {
 		c.err = c.startReceiving(ctx, handle)
 	})

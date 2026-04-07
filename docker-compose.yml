@@ -3,6 +3,7 @@ services:
   kafka:
     image: confluentinc/confluent-local:7.5.0
     container_name: eventapi-kafka
+    restart: unless-stopped
     ports:
       - "9092:9092"
       - "9093:9093"

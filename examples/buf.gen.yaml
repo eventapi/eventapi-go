@@ -1,6 +1,0 @@
-version: v2
-plugins:
-  - local: ../bin/protoc-gen-eventapi
-    out: ./gen
-  - local: ../bin/protoc-gen-eventapi-sink
-    out: ./gen

@@ -12,7 +12,7 @@ type Client interface {
 {{- range .RPCs}}
 {{- if eq .Operation "SEND"}}
 	// New{{.Name}} 创建 {{.InputType}} 事件构建器
-	New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error)
+	New{{.Name}}(event *{{.InputType}}) *{{.InputType}}Builder
 {{- else}}
 	// {{.Name}} 注册 {{.InputType}} 事件处理器
 	{{.Name}}(ctx context.Context, handler func(context.Context, *Received{{.InputType}}) error) error
@@ -21,6 +21,7 @@ type Client interface {
 }
 
 // ClientBuilder 客户端构建器。
+// 真相源: config 包含所有传输层配置,其他字段为 CloudEvent 相关配置
 type ClientBuilder struct {
 	config      Config
 	source      string
@@ -83,6 +84,12 @@ func (b *ClientBuilder) WithExtensionsProvider(fn cloudevent.ExtensionsProvider)
 // WithTransportBuilder 设置自定义 Transport 工厂函数。
 func (b *ClientBuilder) WithTransportBuilder(fn func(context.Context, Config) (rocketmq.Transport, error)) *ClientBuilder {
 	b.transportFn = fn
+	return b
+}
+
+// WithEnabled 设置是否启用此传输通道。
+func (b *ClientBuilder) WithEnabled(enabled bool) *ClientBuilder {
+	b.config.Enabled = enabled
 	return b
 }
 
@@ -185,29 +192,7 @@ type Received{{.Name}} = rocketmq.ReceivedEvent[*{{.Name}}]
 
 // New{{.Name}} 创建 {{.InputType}} 事件构建器
 // Topic: {{.Channel.Address}}
-func (c *client) New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, error) {
-	ch, err := c.transport.Channel(rocketmq.Channel{
-		Address: "{{.Channel.Address}}",
-		{{buildChannelBinding $.Protocol .Channel}}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create channel: %w", err)
-	}
-	headers := map[string]any{
-{{- if .MessageDef}}
-{{- range .MessageDef.HeaderFields}}
-		"{{.JSONTag}}": event.{{.Name}},
-{{- end}}
-{{- end}}
-	}
-	send := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte]) error {
-		return c.sendWithExtensions(ctx, ce, headers, ch.Send)
-	}
-	sendTx := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte], callback func(context.Context) error) error {
-		return c.sendWithExtensions(ctx, ce, headers, func(ctx2 context.Context, ce2 *cloudevent.CloudEvent[[]byte]) error {
-			return ch.SendTransaction(ctx2, ce2, callback)
-		})
-	}
+func (c *client) New{{.Name}}(event *{{.InputType}}) *{{.InputType}}Builder {
 	ce := &cloudevent.CloudEvent[*{{.InputType}}]{
 		CloudEventMetadata: cloudevent.CloudEventMetadata{
 			Id:              c.newUUID(),
@@ -220,7 +205,36 @@ func (c *client) New{{.Name}}(event *{{.InputType}}) (*{{.InputType}}Builder, er
 		},
 		Data: event,
 	}
-	return rocketmq.NewEventBuilder(ce, c.codec, send, sendTx), nil
+	headers := map[string]any{
+{{- if .MessageDef}}
+{{- range .MessageDef.HeaderFields}}
+		"{{.JSONTag}}": event.{{.Name}},
+{{- end}}
+{{- end}}
+	}
+	send := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte]) error {
+		ch, err := c.transport.Channel(rocketmq.Channel{
+			Address: "{{.Channel.Address}}",
+			{{buildChannelBinding $.Protocol .Channel}}
+		})
+		if err != nil {
+			return fmt.Errorf("create channel: %w", err)
+		}
+		return c.sendWithExtensions(ctx, ce, headers, ch.Send)
+	}
+	sendTx := func(ctx context.Context, ce *cloudevent.CloudEvent[[]byte], callback func(context.Context) error) error {
+		ch, err := c.transport.Channel(rocketmq.Channel{
+			Address: "{{.Channel.Address}}",
+			{{buildChannelBinding $.Protocol .Channel}}
+		})
+		if err != nil {
+			return fmt.Errorf("create channel: %w", err)
+		}
+		return c.sendWithExtensions(ctx, ce, headers, func(ctx2 context.Context, ce2 *cloudevent.CloudEvent[[]byte]) error {
+			return ch.SendTransaction(ctx2, ce2, callback)
+		})
+	}
+	return rocketmq.NewEventBuilder(ce, c.codec, send, sendTx)
 }
 {{- else}}
 

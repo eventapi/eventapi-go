@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"sync"
 	"time"
 
@@ -118,6 +119,11 @@ type Config struct {
 	// TransactionChecker 事务消息回查处理器。
 	// 当 Producer 重启或网络中断时，RocketMQ 会调用此函数检查半消息的本地事务状态。
 	TransactionChecker *TransactionChecker
+
+	// Enabled 是否启用此传输通道。
+	// false 时 Send() 静默跳过，OnReceive() 不启动消费者。
+	// 注意: Go bool 零值为 false，需显式设为 true 启用
+	Enabled bool
 }
 
 // TransactionChecker 事务消息回查配置。
@@ -137,8 +143,10 @@ type rocketmqTransport struct {
 }
 
 type rocketmqChannel struct {
-	transport *rocketmqTransport
-	channel   Channel
+	transport   *rocketmqTransport
+	channel     *eventapiv1.OperationRule_Channel
+	receiveOnce sync.Once
+	receiveErr  error
 }
 
 // New 创建 RocketMQ Transport。
@@ -195,12 +203,8 @@ func buildProducerOptions(cfg Config) []golang.ProducerOption {
 	return opts
 }
 
-// Channel 为给定配置创建一个新的 RocketMQ 通道
-// 每个 Channel 对应一个 Topic，Consumer 在首次调用 OnReceive 时懒创建
-//
-//nolint:copylocks // Channel is a protobuf message type alias, passing by value is required by interface
 func (t *rocketmqTransport) Channel(ch Channel) (TransportChannel, error) {
-	return &rocketmqChannel{transport: t, channel: ch}, nil
+	return &rocketmqChannel{transport: t, channel: &ch}, nil
 }
 
 func (t *rocketmqTransport) Close() error {
@@ -259,6 +263,9 @@ func (t *rocketmqTransport) getOrCreateConsumer(topic string, filter *golang.Fil
 }
 
 func (c *rocketmqChannel) Send(ctx context.Context, event *cloudevent.CloudEvent[[]byte]) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
 	topic := c.channel.Address
 	if topic == "" {
 		return errEmptyTopic
@@ -281,6 +288,9 @@ func (c *rocketmqChannel) Send(ctx context.Context, event *cloudevent.CloudEvent
 
 // SendTransaction 发送事务消息，callback 为本地事务执行函数
 func (c *rocketmqChannel) SendTransaction(ctx context.Context, event *cloudevent.CloudEvent[[]byte], callback func(context.Context) error) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
 	topic := c.channel.Address
 	if topic == "" {
 		return errEmptyTopic
@@ -325,9 +335,7 @@ func buildMessage(topic string, event *cloudevent.CloudEvent[[]byte], binding bi
 	}
 
 	if props := msg.GetProperties(); props != nil {
-		for k, v := range buildProperties(event) {
-			props[k] = v
-		}
+		maps.Copy(props, buildProperties(event))
 	}
 
 	return msg
@@ -421,6 +429,16 @@ func sendNormal(ctx context.Context, p golang.Producer, msg *golang.Message, asy
 }
 
 func (c *rocketmqChannel) OnReceive(ctx context.Context, handle func(context.Context, *ReceivedEvent[[]byte]) error) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
+	c.receiveOnce.Do(func() {
+		c.receiveErr = c.startReceiving(ctx, handle)
+	})
+	return c.receiveErr
+}
+
+func (c *rocketmqChannel) startReceiving(ctx context.Context, handle func(context.Context, *ReceivedEvent[[]byte]) error) error {
 	topic := c.channel.Address
 	if topic == "" {
 		return errEmptyTopic
@@ -463,9 +481,7 @@ func (c *rocketmqChannel) receiveLoop(ctx context.Context, consumer golang.Simpl
 		msgs, err := consumer.Receive(ctx, batchSize, invisibleDuration)
 		if err != nil {
 			delay := baseDelay * time.Duration(1<<retries)
-			if delay > maxDelay {
-				delay = maxDelay
-			}
+			delay = min(delay, maxDelay)
 			time.Sleep(delay)
 			retries++
 			continue

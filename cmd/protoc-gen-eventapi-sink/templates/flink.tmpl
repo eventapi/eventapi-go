@@ -6,7 +6,7 @@
 -- Source table (JSON format, Flink 自动反序列化)
 CREATE TEMPORARY TABLE kafka_source (
 {{- range $h := uniqueHeaders .Mappings }}
-  {{ $h }} STRING METADATA FROM 'header' VIRTUAL,
+  {{ $h }} STRING METADATA FROM 'header.{{ $h }}' VIRTUAL,
 {{- end }}
 {{ dataFieldsSQL .Mappings (cleanTarget .Sink.Target) -}}
 ) WITH (
@@ -22,7 +22,7 @@ CREATE TEMPORARY TABLE kafka_source (
 -- Source table (raw format, 手动解析 data 字段)
 CREATE TEMPORARY TABLE kafka_source (
 {{- range $h := uniqueHeaders .Mappings }}
-  {{ $h }} STRING METADATA FROM 'header' VIRTUAL,
+  {{ $h }} STRING METADATA FROM 'header.{{ $h }}' VIRTUAL,
 {{- end }}
   `value` STRING
 ) WITH (

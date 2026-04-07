@@ -91,6 +91,11 @@ type Config struct {
 
 	// ReaderMiddleware 接收中间件链。
 	ReaderMiddleware []ReaderMiddleware
+
+	// Enabled 是否启用此传输通道。
+	// false 时 Send() 静默跳过，OnReceive() 不启动消费者。
+	// 适用于开发/测试环境，避免代码执行但又不想真正连接消息队列。
+	Enabled bool
 }
 
 // WriteFunc 底层写入操作。
@@ -118,7 +123,7 @@ type kafkaTransport struct {
 // kafkaChannel Kafka 通道实现
 type kafkaChannel struct {
 	transport        *kafkaTransport
-	channel          Channel
+	channel          *eventapiv1.OperationRule_Channel
 	reader           *kafkago.Reader
 	readerMiddleware []ReaderMiddleware
 	receiveOnce      sync.Once
@@ -170,12 +175,10 @@ func New(_ context.Context, cfg Config) (Transport, error) {
 	}, nil
 }
 
-// Channel 返回指定通道的 TransportChannel
-// 每个 Channel 对应一个独立的 Topic，Reader 在首次调用 OnReceive 时延迟创建
 func (t *kafkaTransport) Channel(ch Channel) (TransportChannel, error) {
 	return &kafkaChannel{
 		transport:        t,
-		channel:          ch,
+		channel:          &ch,
 		readerMiddleware: t.config.ReaderMiddleware,
 	}, nil
 }
@@ -267,6 +270,9 @@ func kafkaHeadersToCloudEvent(headers []kafkago.Header, data []byte) *cloudevent
 }
 
 func (c *kafkaChannel) Send(ctx context.Context, event *cloudevent.CloudEvent[[]byte]) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
 	headers := cloudEventToKafkaHeaders(event)
 
 	msg := &kafkago.Message{
@@ -289,6 +295,9 @@ func (c *kafkaChannel) Send(ctx context.Context, event *cloudevent.CloudEvent[[]
 // OnReceive 注册接收处理器
 // 使用 sync.Once 确保每个 channel 只启动一次消费
 func (c *kafkaChannel) OnReceive(ctx context.Context, handle func(context.Context, *ReceivedEvent[[]byte]) error) error {
+	if !c.transport.config.Enabled {
+		return nil
+	}
 	if c.transport.config.GroupID == "" {
 		return fmt.Errorf("GroupID is required for receiving messages")
 	}
@@ -356,22 +365,22 @@ func (c *kafkaChannel) receiveLoop(ctx context.Context, handle func(context.Cont
 		}
 
 		for retries = 0; retries < maxRetries; retries++ {
-			msg, err := fetchFunc(ctx)
-			if err == nil {
+			msg, fetchErr := fetchFunc(ctx)
+			if fetchErr == nil {
 				kafkaMsg = *msg
+				err = nil
 				break
 			}
 
-			if err == context.Canceled || err == context.DeadlineExceeded {
+			if fetchErr == context.Canceled || fetchErr == context.DeadlineExceeded {
 				return nil
 			}
 
 			// 指数退避
 			delay := baseDelay * time.Duration(1<<retries)
-			if delay > maxDelay {
-				delay = maxDelay
-			}
+			delay = min(delay, maxDelay)
 			time.Sleep(delay)
+			err = fetchErr
 		}
 
 		if err != nil {
